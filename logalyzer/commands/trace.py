@@ -11,10 +11,20 @@ from ..utils import (
 from .scan import _filter_entries, _print_time_range, _print_file_stats
 from ..output import echo
 
+ID_TYPE_CHOICES = click.Choice(["trace_id", "request_id", "span_id", "session_id"])
+
+ID_TYPE_LABELS = {
+    "trace_id": "trace_id",
+    "request_id": "request_id",
+    "span_id": "span_id",
+    "session_id": "session_id",
+}
+
 
 @click.command()
 @click.argument("files", nargs=-1, required=True)
 @click.option("--trace-id", "-t", help="指定 trace_id 追踪（可从错误日志中获取）")
+@click.option("--id-type", "-T", type=ID_TYPE_CHOICES, default="trace_id", help="选择 ID 类型：trace_id / request_id / span_id / session_id")
 @click.option("--find-errors", "-E", is_flag=True, help="自动查找所有包含错误的 trace")
 @click.option("--start", "-s", help="开始时间")
 @click.option("--end", "-e", help="结束时间")
@@ -26,6 +36,7 @@ from ..output import echo
 def trace_cmd(
     files,
     trace_id,
+    id_type,
     find_errors,
     start,
     end,
@@ -56,14 +67,27 @@ def trace_cmd(
 
     trace_map = defaultdict(list)
     for entry in entries:
-        if entry.trace_id:
-            trace_map[entry.trace_id].append(entry)
+        group_id = None
+        if id_type == "trace_id":
+            group_id = entry.trace_id or None
+        else:
+            group_id = entry.metadata.get(id_type) or parser.extract_id(entry.raw_line, id_type)
+        if group_id:
+            trace_map[group_id].append(entry)
+
+    id_label = ID_TYPE_LABELS.get(id_type, id_type)
 
     if trace_id:
-        if trace_id not in trace_map:
-            echo(Colorizer.error(f"未找到 trace_id: {trace_id}"))
-            return
-        contexts = [TraceContext(trace_id=trace_id, entries=trace_map[trace_id])]
+        if id_type != "trace_id":
+            if trace_id not in trace_map:
+                echo(Colorizer.error(f"未找到 {id_label}: {trace_id}"))
+                return
+            contexts = [TraceContext(trace_id=trace_id, entries=trace_map[trace_id])]
+        else:
+            if trace_id not in trace_map:
+                echo(Colorizer.error(f"未找到 trace_id: {trace_id}"))
+                return
+            contexts = [TraceContext(trace_id=trace_id, entries=trace_map[trace_id])]
     elif find_errors:
         error_traces = []
         for tid, t_entries in trace_map.items():
@@ -82,17 +106,37 @@ def trace_cmd(
         )[:limit]
 
     for i, ctx in enumerate(contexts, 1):
-        _print_trace_context(ctx, i, hide_sensitive, no_color, show_timeline)
+        _print_trace_context(ctx, i, hide_sensitive, no_color, show_timeline, id_type)
         if i < len(contexts):
             echo()
 
 
-def _print_trace_context(ctx, index, hide_sensitive, no_color, show_timeline):
+def _build_service_path_with_durations(entries):
+    sorted_entries = sorted(entries, key=lambda e: e.timestamp)
+    services = []
+    last_service = None
+    last_service_time = None
+    for entry in sorted_entries:
+        if entry.service and entry.service != last_service:
+            if last_service is not None and last_service_time is not None:
+                delta = (entry.timestamp - last_service_time).total_seconds() * 1000
+                services.append((last_service, delta))
+            elif last_service is not None:
+                services.append((last_service, None))
+            last_service = entry.service
+            last_service_time = entry.timestamp
+    if last_service is not None:
+        services.append((last_service, None))
+    return services
+
+
+def _print_trace_context(ctx, index, hide_sensitive, no_color, show_timeline, id_type="trace_id"):
     echo(Colorizer.banner(f"{'=' * 60}"))
     status_icon = "❌" if ctx.has_error else "✅"
+    id_label = ID_TYPE_LABELS.get(id_type, id_type)
     echo(
         Colorizer.banner(
-            f"{status_icon} Trace #{index}: {Colorizer.trace_id(ctx.trace_id)}"
+            f"{status_icon} Trace #{index}: {Colorizer.trace_id(ctx.trace_id)} ({id_label})"
         )
     )
     echo(Colorizer.banner(f"{'=' * 60}"))
@@ -118,10 +162,19 @@ def _print_trace_context(ctx, index, hide_sensitive, no_color, show_timeline):
             f"   {Colorizer.summary_key('累计耗时:')} "
             f"{Colorizer.summary_value(f'{ctx.total_duration_ms:.0f}ms', highlight=ctx.total_duration_ms > 3000)}"
         )
-    echo(
-        f"   {Colorizer.summary_key('服务路径:')} "
-        + " → ".join(Colorizer.service(s) for s in ctx.service_path)
-    )
+
+    path_parts = _build_service_path_with_durations(ctx.entries)
+    if path_parts:
+        segments = [Colorizer.service(path_parts[0][0])]
+        for i in range(1, len(path_parts)):
+            prev_delta = path_parts[i - 1][1]
+            delta_str = f"(+{prev_delta:.0f}ms)" if prev_delta is not None else ""
+            segments.append(f"--({delta_str})-->" if delta_str else " --> ")
+            segments.append(Colorizer.service(path_parts[i][0]))
+        echo(
+            f"   {Colorizer.summary_key('服务路径:')} "
+            + " ".join(segments)
+        )
 
     error_count = sum(1 for e in ctx.entries if e.is_error)
     warn_count = sum(1 for e in ctx.entries if e.is_warn)

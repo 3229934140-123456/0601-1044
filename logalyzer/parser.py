@@ -3,7 +3,7 @@ from typing import List, Optional, TextIO, Tuple, Dict
 import os
 import glob
 from .models import LogEntry
-from .config import LOG_PATTERNS, ERROR_CODE_PATTERNS, DURATION_PATTERNS, TRACE_ID_PATTERN
+from .config import LOG_PATTERNS, ERROR_CODE_PATTERNS, DURATION_PATTERNS, TRACE_ID_PATTERN, REQUEST_ID_PATTERNS, SPAN_ID_PATTERNS, SESSION_ID_PATTERNS
 from .utils import parse_timestamp
 
 
@@ -96,6 +96,21 @@ class LogParser:
             return match.group(1)
         return None
 
+    def extract_id(self, line: str, id_type: str = "trace_id") -> Optional[str]:
+        if id_type == "trace_id":
+            return self._extract_trace_id(line)
+        pattern_map = {
+            "request_id": REQUEST_ID_PATTERNS,
+            "span_id": SPAN_ID_PATTERNS,
+            "session_id": SESSION_ID_PATTERNS,
+        }
+        patterns = pattern_map.get(id_type, [])
+        for pattern in patterns:
+            match = pattern.search(line)
+            if match:
+                return match.group(1)
+        return None
+
     def _extract_error_code(self, line: str) -> Optional[str]:
         for pattern in ERROR_CODE_PATTERNS:
             match = pattern.search(line)
@@ -123,6 +138,17 @@ class LogParser:
         kv_pattern = re.compile(r'(\w+)=["\']([^"\']+)["\']')
         for match in kv_pattern.finditer(line):
             metadata[match.group(1)] = match.group(2)
+        for id_type, patterns in [
+            ("request_id", REQUEST_ID_PATTERNS),
+            ("span_id", SPAN_ID_PATTERNS),
+            ("session_id", SESSION_ID_PATTERNS),
+        ]:
+            if id_type not in metadata:
+                for pattern in patterns:
+                    m = pattern.search(line)
+                    if m:
+                        metadata[id_type] = m.group(1)
+                        break
         return metadata
 
     def _clean_duration_from_message(self, message: str, duration_ms: float) -> str:

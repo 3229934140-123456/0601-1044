@@ -203,8 +203,15 @@ def _print_slow_request_stats(entries, threshold_ms, top_n):
             echo()
 
 
+def _align_to_bucket(ts, interval_seconds):
+    epoch = datetime(1970, 1, 1)
+    total_seconds = int((ts - epoch).total_seconds())
+    bucket_start = (total_seconds // interval_seconds) * interval_seconds
+    return datetime.fromtimestamp(bucket_start)
+
+
 def _print_peak_hour_stats(entries, interval_str):
-    echo(Colorizer.banner(f"⚡ 峰值时段分析 (间隔: {interval_str})"))
+    echo(Colorizer.banner(f"峰值时段分析 (间隔: {interval_str})"))
 
     if not entries:
         return
@@ -222,10 +229,7 @@ def _print_peak_hour_stats(entries, interval_str):
 
     for entry in entries:
         ts = entry.timestamp
-        bucket_ts = ts - timedelta(
-            seconds=ts.second % interval_seconds,
-            microseconds=ts.microsecond
-        )
+        bucket_ts = _align_to_bucket(ts, interval_seconds)
         bucket_key = bucket_ts.strftime("%Y-%m-%d %H:%M")
         time_buckets[bucket_key]["total"] += 1
         if entry.is_error:
@@ -263,7 +267,7 @@ def _print_peak_hour_stats(entries, interval_str):
     echo(f"   {Colorizer.summary_key('时间趋势:')}")
     for bucket, data in sorted(time_buckets.items())[-12:]:
         bar = Colorizer.bar(data["total"], max_total, width=25)
-        error_flag = Colorizer.error_code(" ❌") if data["error"] > 0 else ""
+        error_flag = " [ERR]" if data["error"] > 0 else ""
         echo(f"   {Colorizer.timestamp(bucket):<18} {bar} {data['total']:>5}{error_flag}")
 
 

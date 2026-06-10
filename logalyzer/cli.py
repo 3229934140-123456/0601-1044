@@ -1,7 +1,7 @@
 import click
 import sys
 from . import __version__
-from .commands import scan_cmd, filter_cmd, trace_cmd, stats_cmd, export_cmd
+from .commands import scan_cmd, filter_cmd, trace_cmd, stats_cmd, export_cmd, incident_cmd
 from .output import echo
 
 
@@ -16,11 +16,12 @@ def main(no_color, config):
     快速定位线上问题，无需打开复杂后台。
 
     常用命令:
-      scan    按时间范围扫描日志
-      filter  按关键词过滤日志
-      trace   按请求编号追踪调用链
-      stats   统计分析（错误码、慢请求、峰值）
-      export  导出分析结果和排查记录
+      scan      按时间范围扫描日志
+      filter    按关键词过滤日志
+      trace     按请求编号追踪调用链
+      stats     统计分析（错误码、慢请求、峰值）
+      export    导出分析结果和排查记录
+      incident  事件会话模式（创建、追踪、关闭、导出）
 
     示例:
       logalyzer scan app.log --last 30m -L ERROR
@@ -28,6 +29,7 @@ def main(no_color, config):
       logalyzer trace app.log --trace-id abc123xyz
       logalyzer stats app.log --last 1h
       logalyzer export app.log -o report.txt --save-investigation
+      logalyzer incident create --title "登录超时" --severity 高
     """
     if no_color:
         import os
@@ -39,6 +41,7 @@ main.add_command(filter_cmd, "filter")
 main.add_command(trace_cmd, "trace")
 main.add_command(stats_cmd, "stats")
 main.add_command(export_cmd, "export")
+main.add_command(incident_cmd, "incident")
 
 
 if __name__ == "__main__":

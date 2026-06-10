@@ -3,6 +3,7 @@ import os
 import json
 import base64
 import hashlib
+import zlib
 from datetime import datetime
 from pathlib import Path
 from ..parser import LogParser
@@ -17,10 +18,11 @@ from ..output import echo
 
 
 INVESTIGATION_DIR = Path.home() / ".logalyzer" / "investigations"
+LINK_STORE_DIR = Path.home() / ".logalyzer" / "links"
 
 
 @click.command()
-@click.argument("files", nargs=-1, required=True)
+@click.argument("files", nargs=-1, required=False)
 @click.option("--output", "-o", help="输出文件路径")
 @click.option("--format", "-f", "fmt", type=click.Choice(["text", "json", "html", "markdown"]), default="text", help="导出格式")
 @click.option("--start", "-s", help="开始时间")
@@ -34,6 +36,7 @@ INVESTIGATION_DIR = Path.home() / ".logalyzer" / "investigations"
 @click.option("--save-investigation", is_flag=True, help="保存到排查记录")
 @click.option("--notes", "-n", help="排查备注说明")
 @click.option("--generate-link", is_flag=True, help="生成问题片段链接")
+@click.option("--decode-link", help="解码问题片段链接，还原关键日志摘要")
 @click.option("--list-investigations", is_flag=True, help="列出所有排查记录")
 @click.option("--show-investigation", help="查看指定 ID 的排查记录")
 @click.option("--delete-investigation", help="删除指定 ID 的排查记录")
@@ -52,13 +55,12 @@ def export_cmd(
     save_investigation,
     notes,
     generate_link,
+    decode_link,
     list_investigations,
     show_investigation,
     delete_investigation,
 ):
     """导出分析结果、保存排查记录、生成问题片段链接"""
-    parser = LogParser()
-
     if list_investigations:
         _list_investigations()
         return
@@ -71,8 +73,18 @@ def export_cmd(
         _delete_investigation(delete_investigation)
         return
 
+    if decode_link:
+        _decode_problem_link(decode_link)
+        return
+
+    if not files:
+        echo(Colorizer.error("请提供日志文件路径，或使用 --list-investigations / --show-investigation / --delete-investigation / --decode-link"))
+        return
+
+    parser = LogParser()
+
     echo(Colorizer.banner("=" * 60))
-    echo(Colorizer.banner("📤 日志导出工具"))
+    echo(Colorizer.banner("导出 日志导出工具"))
     echo(Colorizer.banner("=" * 60))
 
     start_time, end_time = parse_time_range(start, end, last)
@@ -104,20 +116,23 @@ def export_cmd(
 
     if output:
         exported_file = _export_entries(entries, output, fmt, start_time, end_time, notes)
-        echo(Colorizer.success(f"✓ 已导出到: {exported_file}"))
+        echo(Colorizer.success(f"已导出到: {exported_file}"))
 
     if save_investigation:
         inv_id = _save_investigation(entries, files, start_time, end_time, level, service, keyword, trace_id, notes, fmt)
-        echo(Colorizer.success(f"✓ 已保存排查记录，ID: {inv_id}"))
+        echo(Colorizer.success(f"已保存排查记录，ID: {inv_id}"))
         echo(f"  查看: logalyzer export --show-investigation {inv_id}")
+        echo(f"  删除: logalyzer export --delete-investigation {inv_id}")
+        echo(f"  列表: logalyzer export --list-investigations")
 
     if generate_link:
         link = _generate_problem_link(entries, trace_id or (keyword[0] if keyword else ""))
         echo()
-        echo(Colorizer.banner("🔗 问题片段链接:"))
+        echo(Colorizer.banner("问题片段链接:"))
         echo(f"   {link}")
         echo()
-        echo(Colorizer.warning("注: 链接包含编码后的日志片段，可用于快速分享"))
+        echo(Colorizer.warning("链接为完整可解码格式，另一台机器使用以下命令还原:"))
+        echo(f"   logalyzer export --decode-link \"{link}\"")
 
     if not output and not save_investigation and not generate_link:
         echo(Colorizer.warning("请指定 --output, --save-investigation 或 --generate-link"))
@@ -150,7 +165,7 @@ def _format_text(entries, start_time, end_time, notes):
     lines.append("=" * 60)
     lines.append(f"生成时间: {format_timestamp(datetime.now())}")
     if start_time and end_time:
-        lines.append(f"时间范围: {format_timestamp(start_time)} → {format_timestamp(end_time)}")
+        lines.append(f"时间范围: {format_timestamp(start_time)} -> {format_timestamp(end_time)}")
     lines.append(f"总记录数: {len(entries)}")
     error_count = sum(1 for e in entries if e.is_error)
     lines.append(f"错误数: {error_count}")
@@ -208,7 +223,7 @@ def _format_markdown(entries, start_time, end_time, notes):
     lines.append("")
     lines.append(f"- **生成时间**: {format_timestamp(datetime.now())}")
     if start_time and end_time:
-        lines.append(f"- **时间范围**: {format_timestamp(start_time)} → {format_timestamp(end_time)}")
+        lines.append(f"- **时间范围**: {format_timestamp(start_time)} -> {format_timestamp(end_time)}")
     lines.append(f"- **总记录数**: {len(entries)}")
     error_count = sum(1 for e in entries if e.is_error)
     lines.append(f"- **错误数**: {error_count}")
@@ -253,12 +268,12 @@ def _format_html(entries, start_time, end_time, notes):
     </style>
 </head>
 <body>
-    <h1>📊 日志分析报告</h1>
+    <h1>日志分析报告</h1>
     <div class="summary">
         <p><strong>生成时间:</strong> {format_timestamp(datetime.now())}</p>
 """
     if start_time and end_time:
-        html += f"        <p><strong>时间范围:</strong> {format_timestamp(start_time)} → {format_timestamp(end_time)}</p>\n"
+        html += f"        <p><strong>时间范围:</strong> {format_timestamp(start_time)} -> {format_timestamp(end_time)}</p>\n"
     error_count = sum(1 for e in entries if e.is_error)
     html += f"""
         <p><strong>总记录数:</strong> {len(entries)}</p>
@@ -345,17 +360,21 @@ def _save_investigation(entries, files, start_time, end_time, level, service, ke
 
 def _list_investigations():
     echo(Colorizer.banner("=" * 60))
-    echo(Colorizer.banner("📋 排查记录列表"))
+    echo(Colorizer.banner("排查记录列表"))
     echo(Colorizer.banner("=" * 60))
     echo()
 
     if not INVESTIGATION_DIR.exists():
         echo(Colorizer.warning("暂无排查记录"))
+        echo()
+        echo("  保存排查记录: logalyzer export app.log --save-investigation")
         return
 
     files = sorted(INVESTIGATION_DIR.glob("*.json"), reverse=True)
     if not files:
         echo(Colorizer.warning("暂无排查记录"))
+        echo()
+        echo("  保存排查记录: logalyzer export app.log --save-investigation")
         return
 
     echo(f"   {'ID':<14} {'创建时间':<20} {'记录数':<8} 备注")
@@ -377,37 +396,44 @@ def _list_investigations():
         except Exception as e:
             echo(f"   {filepath.stem}: 读取失败 ({e})")
 
+    echo()
+    echo("  查看: logalyzer export --show-investigation <ID>")
+    echo("  删除: logalyzer export --delete-investigation <ID>")
+
 
 def _show_investigation(inv_id):
     filepath = INVESTIGATION_DIR / f"{inv_id}.json"
     if not filepath.exists():
         echo(Colorizer.error(f"未找到排查记录: {inv_id}"))
+        echo("  列出所有记录: logalyzer export --list-investigations")
         return
 
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     echo(Colorizer.banner("=" * 60))
-    echo(Colorizer.banner(f"🔍 排查记录: {inv_id}"))
+    echo(Colorizer.banner(f"排查记录: {inv_id}"))
     echo(Colorizer.banner("=" * 60))
     echo()
     echo(f"   {Colorizer.summary_key('创建时间:')} {data['created_at']}")
-    echo(f"   {Colorizer.summary_key('查询文件:')} {', '.join(data['files'])}")
+    if data.get("files"):
+        echo(f"   {Colorizer.summary_key('查询文件:')} {', '.join(data['files'])}")
     if data.get("notes"):
         echo(f"   {Colorizer.summary_key('备注:')} {data['notes']}")
     echo(f"   {Colorizer.summary_key('记录数:')} {Colorizer.summary_value(str(data['entry_count']), highlight=True)}")
     echo()
 
     query = data.get("query", {})
-    echo(f"   {Colorizer.summary_key('查询条件:')}")
-    for key, value in query.items():
-        if value:
-            val_str = ", ".join(value) if isinstance(value, list) else str(value)
-            echo(f"     {key}: {val_str}")
-    echo()
+    if query:
+        echo(f"   {Colorizer.summary_key('查询条件:')}")
+        for key, value in query.items():
+            if value:
+                val_str = ", ".join(value) if isinstance(value, list) else str(value)
+                echo(f"     {key}: {val_str}")
+        echo()
 
     echo(Colorizer.banner("-" * 60))
-    echo(Colorizer.banner("📋 日志详情"))
+    echo(Colorizer.banner("日志详情"))
     echo(Colorizer.banner("-" * 60))
     echo()
 
@@ -424,42 +450,161 @@ def _show_investigation(inv_id):
         echo(line)
 
     echo()
-    echo(f"使用以下命令重新导出:")
-    echo(f"  logalyzer export --show-investigation {inv_id}")
+    echo("相关命令:")
+    echo(f"  导出报告: logalyzer export --show-investigation {inv_id}")
+    echo(f"  删除记录: logalyzer export --delete-investigation {inv_id}")
+    echo(f"  所有记录: logalyzer export --list-investigations")
 
 
 def _delete_investigation(inv_id):
     filepath = INVESTIGATION_DIR / f"{inv_id}.json"
     if not filepath.exists():
         echo(Colorizer.error(f"未找到排查记录: {inv_id}"))
+        echo("  列出所有记录: logalyzer export --list-investigations")
         return
 
     filepath.unlink()
-    echo(Colorizer.success(f"✓ 已删除排查记录: {inv_id}"))
+    echo(Colorizer.success(f"已删除排查记录: {inv_id}"))
 
 
 def _generate_problem_link(entries, keyword=""):
-    if len(entries) > 50:
-        entries = entries[:50]
+    LINK_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
     problem_data = {
+        "v": 1,
         "ts": format_timestamp(datetime.now()),
         "kw": keyword,
         "cnt": len(entries),
         "logs": [
             {
-                "t": format_timestamp(e.timestamp, "%H:%M:%S.%f")[:-3],
+                "t": format_timestamp(e.timestamp, "%Y-%m-%d %H:%M:%S.%f")[:-3],
                 "l": e.level,
                 "s": e.service,
-                "tid": e.trace_id[:8] if e.trace_id else "",
-                "m": e.message[:100],
+                "tid": e.trace_id,
+                "m": e.message,
+                "ec": e.error_code,
+                "dur": e.duration_ms,
             }
             for e in entries
         ],
     }
 
-    json_str = json.dumps(problem_data, ensure_ascii=False)
-    encoded = base64.urlsafe_b64encode(json_str.encode("utf-8")).decode("utf-8")
+    json_str = json.dumps(problem_data, ensure_ascii=False, separators=(",", ":"))
+    compressed = zlib.compress(json_str.encode("utf-8"), 9)
+    encoded = base64.urlsafe_b64encode(compressed).decode("utf-8")
 
-    link = f"logalyzer://problem/{encoded[:200]}..."
+    if len(encoded) <= 2000:
+        link = f"logalyzer:link:{encoded}"
+        return link
+
+    short_code = hashlib.md5(compressed).hexdigest()[:10]
+    link_file = LINK_STORE_DIR / f"{short_code}.json"
+    with open(link_file, "w", encoding="utf-8") as f:
+        json.dump(problem_data, f, ensure_ascii=False, indent=2)
+
+    link = f"logalyzer:short:{short_code}"
     return link
+
+
+def _decode_problem_link(link):
+    echo(Colorizer.banner("=" * 60))
+    echo(Colorizer.banner("解码问题片段链接"))
+    echo(Colorizer.banner("=" * 60))
+    echo()
+
+    if link.startswith("logalyzer:link:"):
+        encoded = link[len("logalyzer:link:"):]
+        try:
+            compressed = base64.urlsafe_b64decode(encoded.encode("utf-8"))
+            json_str = zlib.decompress(compressed).decode("utf-8")
+            problem_data = json.loads(json_str)
+        except Exception as e:
+            echo(Colorizer.error(f"链接解码失败: {e}"))
+            return
+    elif link.startswith("logalyzer:short:"):
+        short_code = link[len("logalyzer:short:"):]
+        link_file = LINK_STORE_DIR / f"{short_code}.json"
+        if not link_file.exists():
+            echo(Colorizer.error(f"本地短码记录不存在: {short_code}"))
+            echo(Colorizer.warning("该短码仅在生成链接的机器上有效，请使用完整链接格式"))
+            return
+        with open(link_file, "r", encoding="utf-8") as f:
+            problem_data = json.load(f)
+    else:
+        try:
+            encoded = link.strip()
+            compressed = base64.urlsafe_b64decode(encoded.encode("utf-8"))
+            json_str = zlib.decompress(compressed).decode("utf-8")
+            problem_data = json.loads(json_str)
+        except Exception:
+            echo(Colorizer.error("无法识别的链接格式"))
+            echo("  支持格式: logalyzer:link:xxx 或 logalyzer:short:xxx")
+            return
+
+    echo(f"   {Colorizer.summary_key('生成时间:')} {problem_data.get('ts', 'N/A')}")
+    if problem_data.get("kw"):
+        echo(f"   {Colorizer.summary_key('关键词:')} {Colorizer.summary_value(problem_data['kw'], highlight=True)}")
+    echo(f"   {Colorizer.summary_key('日志条数:')} {Colorizer.summary_value(str(problem_data.get('cnt', 0)))}")
+    echo()
+
+    logs = problem_data.get("logs", [])
+    if not logs:
+        echo(Colorizer.warning("链接中无日志记录"))
+        return
+
+    error_logs = [l for l in logs if l.get("l") in ("ERROR", "FATAL", "CRITICAL")]
+    slow_logs = [l for l in logs if l.get("dur") and l["dur"] > 3000]
+    trace_ids = set(l.get("tid") for l in logs if l.get("tid"))
+
+    if error_logs:
+        echo(Colorizer.banner("-" * 40))
+        echo(f"   {Colorizer.summary_key('错误日志')} ({len(error_logs)} 条)")
+        echo(Colorizer.banner("-" * 40))
+        for log in error_logs:
+            level_str = Colorizer.level(log["l"])
+            ts_str = Colorizer.timestamp(log["t"])
+            svc_str = Colorizer.service(log.get("s", ""))
+            line = f"   [{ts_str}] [{level_str}] [{svc_str}] {log.get('m', '')}"
+            if log.get("ec"):
+                line += f" (错误码: {Colorizer.error_code(log['ec'])})"
+            if log.get("dur"):
+                line += f" [{log['dur']:.0f}ms]"
+            echo(line)
+        echo()
+
+    if slow_logs:
+        echo(Colorizer.banner("-" * 40))
+        echo(f"   {Colorizer.summary_key('慢请求')} ({len(slow_logs)} 条)")
+        echo(Colorizer.banner("-" * 40))
+        for log in slow_logs:
+            ts_str = Colorizer.timestamp(log["t"])
+            svc_str = Colorizer.service(log.get("s", ""))
+            dur_str = Colorizer.summary_value(f"{log['dur']:.0f}ms", highlight=True)
+            echo(f"   [{ts_str}] [{svc_str}] 耗时: {dur_str} - {log.get('m', '')[:60]}")
+        echo()
+
+    if trace_ids:
+        echo(f"   {Colorizer.summary_key('相关 Trace ID:')}")
+        for tid in sorted(trace_ids):
+            has_error = any(l.get("l") in ("ERROR", "FATAL", "CRITICAL") and l.get("tid") == tid for l in logs)
+            marker = " [错误]" if has_error else ""
+            echo(f"     {Colorizer.trace_id(tid)}{marker}")
+        echo()
+
+    echo(Colorizer.banner("-" * 40))
+    echo(f"   {Colorizer.summary_key('完整日志摘要')}")
+    echo(Colorizer.banner("-" * 40))
+    echo()
+
+    for log in logs:
+        level_str = Colorizer.level(log.get("l", "INFO"))
+        ts_str = Colorizer.timestamp(log.get("t", ""))
+        svc_str = Colorizer.service(log.get("s", ""))
+        tid_str = Colorizer.trace_id(log.get("tid", "")) if log.get("tid") else ""
+        tid_part = f" [{tid_str}]" if tid_str else ""
+        line = f"   [{ts_str}] [{level_str}] [{svc_str}]{tid_part} {log.get('m', '')}"
+        if log.get("ec"):
+            line += f" (错误码: {Colorizer.error_code(log['ec'])})"
+        if log.get("dur"):
+            line += f" [{log['dur']:.0f}ms]"
+        echo(line)

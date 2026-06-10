@@ -68,3 +68,23 @@ DURATION_PATTERNS = [
 ]
 
 TRACE_ID_PATTERN = re.compile(r'\b([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12})\b', re.IGNORECASE)
+
+REQUEST_ID_PATTERNS = [
+    re.compile(r'\brequest_id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\brequest-id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\breq_id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\brequestId\s*=\s*["\']?([^\s"\',;:\}]+)'),
+]
+
+SPAN_ID_PATTERNS = [
+    re.compile(r'\bspan_id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\bspan-id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\bspanId\s*=\s*["\']?([^\s"\',;:\}]+)'),
+]
+
+SESSION_ID_PATTERNS = [
+    re.compile(r'\bsession_id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\bsession-id\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+    re.compile(r'\bsessionId\s*=\s*["\']?([^\s"\',;:\}]+)'),
+    re.compile(r'\bsession\s*=\s*["\']?([^\s"\',;:\}]+)', re.IGNORECASE),
+]
