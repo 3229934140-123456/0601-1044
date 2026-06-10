@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logalyzer"
+version = "1.0.0"
+description = "日志分析平台命令行工具 - 快速定位线上问题"
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.0.0",
+    "colorama>=0.4.6",
+    "pygments>=2.15.0",
+]
+
+[project.scripts]
+logalyzer = "logalyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["logalyzer*"]
